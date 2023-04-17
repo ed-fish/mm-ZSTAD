@@ -52,7 +52,6 @@ TBC
 
 TBC
 
-## Licence
 
 ## License
 
