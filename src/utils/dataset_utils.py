@@ -16,8 +16,12 @@ class ThumosDataset(Dataset):
         self.split = split
         self.transform = transform
         self.audio_transform = audio_transform
+        if split == "train":
+            ext = "*.avi"
+        else:
+            ext = "*.mp4"
         
-        self.video_files = sorted(glob.glob(os.path.join(root_dir, split, '*.avi')))
+        self.video_files = sorted(glob.glob(os.path.join(root_dir, split, ext)))
         self.annotation_files = sorted(glob.glob(os.path.join(root_dir, split, '*.csv')))
 
     def __len__(self):
