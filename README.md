@@ -32,7 +32,8 @@ To use this repository, you will need to have Python 3.7 or later installed. Add
 You can install the required packages using the following command:
 
 ```bash
-pip install -r requirements.txt ```
+pip install -r requirements.txt 
+```
 
 ## Dataset Preparation
 
