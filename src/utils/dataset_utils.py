@@ -16,20 +16,25 @@ class ThumosDataset(Dataset):
         self.split = split
         self.transform = transform
         self.audio_transform = audio_transform
-        if split == "train":
-            ext = "*.avi"
-        else:
-            ext = "*.mp4"
         
-        self.video_files = sorted(glob.glob(os.path.join(root_dir, split, ext)))
-        self.annotation_files = sorted(glob.glob(os.path.join(root_dir, split, '*.csv')))
+        # self.video_files = sorted(glob.glob(os.path.join(root_dir, split, ext)))
+        self.data = pd.read_csv(f"{root_dir}/{split}/thumos_{split}.csv")
+    
 
     def __len__(self):
-        return len(self.video_files)
+        return len(self.data)
 
     def __getitem__(self, idx):
         # Load video frames and audio
-        video_frames, audio_waveform, _ = read_video(self.video_files[idx], pts_unit='sec')
+        video_path = self.data.loc[idx, 'video_path']
+        label = self.data.loc[idx, 'label']
+        if self.split in ["test", "val"]:
+            start_action = self.data.loc[idx, 'start_action']
+            end_action = self.data.loc[idx, 'end_action']
+        else:
+            start_action = 0
+            end_action = 0
+        video_frames, audio_waveform, _ = read_video(video_path, pts_unit='sec')
 
         # Preprocess video frames
         if self.transform:
@@ -40,12 +45,11 @@ class ThumosDataset(Dataset):
             audio_waveform = self.audio_transform(audio_waveform)
 
         # Load temporal labels
-        temporal_labels = pd.read_csv(self.annotation_files[idx])
-        start_times = torch.tensor(temporal_labels['start_time'].values, dtype=torch.float)
-        end_times = torch.tensor(temporal_labels['end_time'].values, dtype=torch.float)
-        action_classes = torch.tensor(temporal_labels['action_class'].values, dtype=torch.long)
-
-        return video_frames, audio_waveform, (start_times, end_times, action_classes)
+        start_action = torch.tensor(start_action, dtype=torch.float)
+        end_action = torch.tensor(end_action, dtype=torch.float)
+        action_classes = torch.tensor(label, dtype=torch.long)
+        return video_frames, audio_waveform, (start_action, end_action, action_classes)
+    
 
 def get_thumos_dataloader(root_dir, split='train', batch_size=16, num_workers=4):
     transform = transforms.Compose([

@@ -5,7 +5,7 @@ from src.utils.dataset_utils import ThumosDataset, get_thumos_dataloader
 
 class TestThumosDataset(unittest.TestCase):
     def setUp(self):
-        self.root_dir = '/mnt/welles/scratch/datasets/thumos/'
+        self.root_dir = '/home/ed/mm-ZSTAD/data/thumos14'
         self.assertGreater(len(os.listdir(self.root_dir)), 0, "The root directory is empty")
         self.train_dataset = ThumosDataset(self.root_dir, split='train')
         self.val_dataset = ThumosDataset(self.root_dir, split='val')
