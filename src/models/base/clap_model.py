@@ -10,7 +10,7 @@ def float32_to_int16(x):
     x = np.clip(x, a_min=-1., a_max=1.)
     return (x * 32767.).astype(np.int16)
 
-class CLAPModel:
+class BaseCLAPModel:
     def __init__(self, enable_fusion=False):
         self.model = laion_clap.CLAP_Module(enable_fusion=enable_fusion)
         self.model.load_ckpt()
@@ -19,6 +19,7 @@ class CLAPModel:
         return self.model.get_audio_embedding_from_filelist(x=audio_files, use_tensor=use_tensor)
 
     def get_audio_embedding_from_data(self, audio_data, use_tensor=False):
+        audio_data = audio_data.squeeze(0)
         return self.model.get_audio_embedding_from_data(x=audio_data, use_tensor=use_tensor)
 
     def get_text_embedding(self, text_data, use_tensor=False):

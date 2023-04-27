@@ -1,2 +1,2 @@
-from .clip_model import CLIPModel
-from .clap_model import CLAPModel
+from .clip_model import BaseCLIPModel
+from .clap_model import BaseCLAPModel

@@ -26,7 +26,7 @@ class TestThumosDataset(unittest.TestCase):
             self.assertIsNotNone(action_classes, "Action classes should not be None.")
 
     def test_dataloader(self):
-        train_dataloader = get_thumos_dataloader(self.root_dir, split='train', batch_size=16, num_workers=4)
+        train_dataloader = get_thumos_dataloader(self.root_dir, split='train', batch_size=16, num_workers=1)
         self.assertIsInstance(train_dataloader, DataLoader, "train_dataloader should be an instance of DataLoader.")
 
 if __name__ == '__main__':
