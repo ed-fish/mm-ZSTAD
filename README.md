@@ -29,10 +29,10 @@ To use this repository, you will need to have Python 3.7 or later installed. Add
 - NumPy
 - Pandas
 
-You can install the required packages using the following command:
+You can install the required packages using conda and the environment.yml file:
 
 ```bash
-pip install -r requirements.txt 
+conda env create -n zstad --file environment.yml
 ```
 
 ## Dataset Preparation
