@@ -34,15 +34,26 @@ class ThumosDataset(Dataset):
         else:
             start_action = 0
             end_action = 0
-        video_frames, audio_waveform, _ = read_video(video_path, pts_unit='sec')
-
-        # Preprocess video frames
-        if self.transform:
-            video_frames = torch.stack([self.transform(Image.fromarray(frame)) for frame in video_frames])
+        video_frames, audio_waveform, _ = read_video(video_path, pts_unit='sec', output_format="TCHW")
+        print(video_frames.shape)
+        
+        video_frames = video_frames[::16, :, :, :]
+        print(video_frames.shape)
+        
+        
+        # # Preprocess video frames
+        # if self.transform:
+        #     video_frames = torch.stack([self.transform(frame) for frame in video_frames])
 
         # Preprocess audio
-        if self.audio_transform:
-            audio_waveform = self.audio_transform(audio_waveform)
+        if audio_waveform.size(1) == 0:
+            # Create an empty waveform with desired shape, e.g., (1, 1)
+            audio_waveform = torch.zeros(2, 100000)
+        # else:
+        #     # audio_waveform = self.audio_transform(audio_waveform)
+        #     audio_waveform = audio_transforms.SlidingWindow(duration=3, overlap=1)(audio_waveform)
+        #     print(audio_waveform.shape)
+            
 
         # Load temporal labels
         start_action = torch.tensor(start_action, dtype=torch.float)
@@ -51,15 +62,14 @@ class ThumosDataset(Dataset):
         return video_frames, audio_waveform, (start_action, end_action, action_classes)
     
 
-def get_thumos_dataloader(root_dir, split='train', batch_size=16, num_workers=4):
+def get_thumos_dataloader(root_dir, split='train', batch_size=1, num_workers=1):
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
+        transforms.Resize((224, 224), antialias=True),
+        transforms.ConvertImageDtype(torch.float32),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    audio_transform = audio_transforms.MelSpectrogram(sample_rate=16000, n_mels=128)
-    
+    audio_transform = audio_transforms.MelSpectrogram(sample_rate=16000, n_mels=64, n_fft=800) 
     thumos_dataset = ThumosDataset(root_dir, split=split, transform=transform, audio_transform=audio_transform)
     dataloader = torch.utils.data.DataLoader(thumos_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 

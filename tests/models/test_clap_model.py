@@ -2,12 +2,12 @@ import unittest
 import numpy as np
 import librosa
 import torch
-from src.models.base.clap_model import CLAPModel, int16_to_float32, float32_to_int16
+from src.models.base.clap_model import BaseCLAPModel, int16_to_float32, float32_to_int16
 from torchvision.io import read_video
 
 class TestCLAPModel(unittest.TestCase):
     def setUp(self):
-        self.clap_model = CLAPModel()
+        self.clap_model = BaseCLAPModel()
         
         _, audio_waveform, _ = read_video("/home/ed/mm-ZSTAD/tests/test_data/test.avi", pts_unit='sec')
         self.test_audio = audio_waveform.numpy()
