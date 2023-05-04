@@ -32,13 +32,10 @@ class ThumosDataset(Dataset):
             start_action = self.data.loc[idx, 'start_action']
             end_action = self.data.loc[idx, 'end_action']
         else:
-            start_action = 0
-            end_action = 0
-        video_frames, audio_waveform, _ = read_video(video_path, pts_unit='sec', output_format="TCHW")
-        print(video_frames.shape)
-        
-        video_frames = video_frames[::16, :, :, :]
-        print(video_frames.shape)
+            start_action = [0]
+            end_action = [0]
+        video_frames, audio_waveform, framerate = read_video(video_path, pts_unit='sec', output_format="TCHW")
+        # video_frames = video_frames[::8, :, :, :]
         
         
         # # Preprocess video frames
@@ -56,6 +53,10 @@ class ThumosDataset(Dataset):
             
 
         # Load temporal labels
+        start_action = start_action.strip("[]").split()
+        end_action = end_action.strip("[]").split()
+        start_action = [float(n) for n in start_action]
+        end_action = [float(n) for n in end_action]
         start_action = torch.tensor(start_action, dtype=torch.float)
         end_action = torch.tensor(end_action, dtype=torch.float)
         action_classes = torch.tensor(label, dtype=torch.long)
