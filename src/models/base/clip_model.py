@@ -7,7 +7,8 @@ class BaseCLIPModel:
         self.model = CLIPModel.from_pretrained(model_name)
 
     def get_image_embedding(self, images, use_tensor=True):
-        images = images.squeeze(0)
+        images = images.squeeze(0) 
+        breakpoint()
         inputs = self.processor(images=images, return_tensors="pt", padding=True)
         with torch.no_grad():
             image_embeddings = self.model.get_image_features(**inputs)

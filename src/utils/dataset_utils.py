@@ -19,6 +19,7 @@ class ThumosDataset(Dataset):
         
         # self.video_files = sorted(glob.glob(os.path.join(root_dir, split, ext)))
         self.data = pd.read_csv(f"{root_dir}/{split}/thumos_{split}.csv")
+        self.downsample = 8
     
 
     def __len__(self):
@@ -35,7 +36,9 @@ class ThumosDataset(Dataset):
             start_action = [0]
             end_action = [0]
         video_frames, audio_waveform, framerate = read_video(video_path, pts_unit='sec', output_format="TCHW")
-        # video_frames = video_frames[::8, :, :, :]
+        frame_rate = framerate["video_fps"]
+        audio_fps = framerate["audio_fps"]
+        video_frames = video_frames[::self.downsample, :, :, :]
         
         
         # # Preprocess video frames
@@ -59,9 +62,41 @@ class ThumosDataset(Dataset):
         end_action = [float(n) for n in end_action]
         start_action = torch.tensor(start_action, dtype=torch.float)
         end_action = torch.tensor(end_action, dtype=torch.float)
+        
+        frame_rate = frame_rate / self.downsample  # Adjust the frame rate according to the downsampled video frames
+        start_frame_indices = (start_action * frame_rate).round().long()
+        end_frame_indices = (end_action * frame_rate).round().long()
         action_classes = torch.tensor(label, dtype=torch.long)
-        return video_frames, audio_waveform, (start_action, end_action, action_classes)
+        return video_frames, audio_waveform, (start_frame_indices, end_frame_indices, action_classes)
     
+def collate_fn(batch):
+    # Sort the batch in the descending order
+    sorted_batch = sorted(batch, key=lambda x: x[0].shape[1], reverse=True)
+
+    # Separate video frames, audio, and ground truths
+    sequences, audios, ground_truths = zip(*sorted_batch)
+
+    # Get sequence lengths
+    lengths = [len(seq) for seq in sequences]
+
+    # Padding
+    padded_sequences = torch.nn.utils.rnn.pad_sequence([seq for seq in sequences], batch_first=True)
+    # padded_audios = pad_audio(audios)
+
+    # Unzip the ground truths
+    start_frame_indices, end_frame_indices, action_classes = zip(*ground_truths)
+    
+    start_frame_indices = torch.nn.utils.rnn.pad_sequence(start_frame_indices, batch_first=True, padding_value=0)
+    end_frame_indices = torch.nn.utils.rnn.pad_sequence(end_frame_indices, batch_first=True, padding_value=0)
+    action_classes = torch.stack(action_classes)
+
+    # Convert to tensors
+    # start_frame_indices = torch.stack(start_frame_indices)
+    # end_frame_indices = torch.stack(end_frame_indices)
+    # action_classes = torch.stack(action_classes)
+
+    return padded_sequences, None, (start_frame_indices, end_frame_indices, action_classes)
+
 
 def get_thumos_dataloader(root_dir, split='train', batch_size=1, num_workers=1):
     transform = transforms.Compose([
@@ -72,6 +107,6 @@ def get_thumos_dataloader(root_dir, split='train', batch_size=1, num_workers=1):
 
     audio_transform = audio_transforms.MelSpectrogram(sample_rate=16000, n_mels=64, n_fft=800) 
     thumos_dataset = ThumosDataset(root_dir, split=split, transform=transform, audio_transform=audio_transform)
-    dataloader = torch.utils.data.DataLoader(thumos_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    dataloader = torch.utils.data.DataLoader(thumos_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=collate_fn, drop_last=True)
 
     return dataloader

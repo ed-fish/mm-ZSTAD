@@ -1,159 +1,156 @@
-import os
-import numpy as np
-from PIL import Image
-import soundfile as sf
 import torch
-from models.base import BaseCLAPModel, BaseCLIPModel
-from utils import ThumosDataset, get_thumos_dataloader
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-import math
+import os
 import re
-import scipy.signal
+import numpy as np
+from collections import defaultdict
+from models.base import BaseCLIPModel
+from utils import get_thumos_dataloader
+from torch.nn.utils.rnn import pad_sequence
+import torch.nn as nn
+
+# Configuration
+root_dir = 'data/thumos14'
+split = "val"  # 'train', 'val', or 'test'
+batch_size = 2
+num_workers = 20
+iou_threshold = 0.3
+window_size = 16
+stride = 8
+threshold = 29.0
+
+# Prepare the dataset and create the data loader
+dataloader = get_thumos_dataloader(root_dir, split=split, batch_size=batch_size, num_workers=num_workers)
+
+# Instantiate the CLIP model
+clip_model = BaseCLIPModel()
+device = "cuda:0"
+
+if torch.cuda.device_count() > 1:
+    print("Let's use", torch.cuda.device_count(), "GPUs!")
+    clip_model= nn.DataParallel(clip_model)
+
+clip_model.to(device)
+
+if torch.cuda.device_count() > 1:
+    clip_model = clip_model.module
+
+    
+
 
 def split_camel_case(s):
     return re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', s)
 
+def prepare_labels(class_file):
+    with open(class_file, 'r') as f:
+        class_labels = [line.strip() for line in f.readlines()]
 
-def cosine_similarity(a, b):
-    a_tensor = torch.tensor(a).to(b.device)
-    b_tensor = torch.tensor(b).to(b.device)
-    return torch.nn.functional.cosine_similarity(a_tensor, b_tensor, dim=0)
+    return {int(label.split()[0]): f"a video of {split_camel_case(' '.join(label.split()[1:]))}" for label in class_labels}
 
-def find_action_segments(similarity_scores, threshold, min_duration, smoothing_window_size=5):
-    # Apply Gaussian smoothing
-    window = scipy.signal.windows.hann(smoothing_window_size)
-    smoothed_scores = np.convolve(similarity_scores, window, mode='same') / sum(window)
+def extract_clip_features(video_frames, clip_model):
+    video_features = clip_model.get_image_embedding(video_frames)
+    return video_features.squeeze(1)
 
-    # Identify continuous segments above the threshold
-    above_threshold = smoothed_scores > threshold
-    action_segments = []
-    start_idx = None
+def detect_temporal_actions(video_features, text_embeddings, window_size, stride, threshold):
+    action_proposals = []
+    video_features = video_features.squeeze(0)
 
-    for idx, is_above in enumerate(above_threshold):
-        if is_above and start_idx is None:
-            start_idx = idx
-        elif not is_above and start_idx is not None:
-            end_idx = idx
-            duration = end_idx - start_idx
-            if duration >= min_duration:
-                action_segments.append((start_idx, end_idx))
-            start_idx = None
+    for i in range(0, video_features.size(0) - window_size, stride):
+        window_features = video_features[i:i + window_size]
+        window_score = torch.mean(window_features, dim=0)
 
-    return action_segments
+        # Calculate similarity between window features and text embeddings
+        similarities = torch.matmul(window_score, text_embeddings.T)
+        max_similarity = torch.max(similarities)
 
-def save_frame_action_segments_figure(video_frames, action_segments, original_class_label, output_dir, resize_factor=0.2):
-    num_frames = len(video_frames[0])
-    num_columns = 10
-    num_rows = math.ceil(num_frames / num_columns)
+        if max_similarity > threshold:
+            action_proposals.append((i, i + window_size, torch.argmax(similarities).item()))
 
-    figsize = (num_columns * 2, num_rows * 2)
+    return action_proposals
 
-    fig, axs = plt.subplots(num_rows, num_columns, figsize=figsize)
-    axs = axs.flatten()
+def calculate_iou(a, b):
+    a_start, a_end = a
+    b_start, b_end = b
+    intersection_start, intersection_end = max(a_start, b_start), min(a_end, b_end)
+    intersection = max(0, intersection_end - intersection_start)
+    union = (a_end - a_start) + (b_end - b_start) - intersection
+    return intersection / union
 
-    # Create a boolean array with True where the action is happening, False otherwise
-    action_present = np.zeros(num_frames, dtype=bool)
-    for start, end in action_segments:
-        action_present[start:end] = True
+def evaluate_temporal_actions(batch_action_proposals, batch_ground_truths, iou_threshold, classes):
+    batch_results = []
+    
+    for action_proposals, ground_truths in zip(batch_action_proposals, batch_ground_truths):
+        true_positives, false_positives = 0, 0
+        gt_class = ground_truths[2].item()
+        found_true_positive = False
 
-    for i, frame in enumerate(video_frames[0]):
-        resized_frame = frame.numpy().transpose(1, 2, 0)
-        resized_frame = Image.fromarray((resized_frame).astype(np.uint8)).resize((int(resized_frame.shape[1] * resize_factor), int(resized_frame.shape[0] * resize_factor)))
-        axs[i].imshow(resized_frame)
-        axs[i].set_xticks([])
-        axs[i].set_yticks([])
+        for proposal in action_proposals:
+            ps, pe, pc = proposal
+            pc = classes[pc]
+            is_true_positive = False
 
-        color = 'green' if action_present[i] else 'red'
-        action_box = patches.Rectangle((0, 1.1), 1, 0.2, facecolor=color, transform=axs[i].transAxes, clip_on=False)
-        axs[i].add_patch(action_box)
+            if pc == gt_class:  # Check if the predicted class matches the ground truth class
+                for gt in zip(ground_truths[0].squeeze(0), ground_truths[1].squeeze(0)):
+                    if calculate_iou((ps, pe), gt) > iou_threshold:
+                        is_true_positive = True
+                        break
 
-        axs[i].set_title(f"Frame {i}")
+            if is_true_positive:
+                true_positives += 1
+                found_true_positive = True
+            else:
+                false_positives += 1
 
-    for i in range(num_frames, num_rows * num_columns):
-        axs[i].axis('off')
+        precision = true_positives / (true_positives + false_positives) if true_positives + false_positives > 0 else 0
+        recall = 1 if found_true_positive else 0
 
-    # Save the figure with a suitable dpi to fit all frames
-    plt.savefig(os.path.join(output_dir, f'{original_class_label}_frame_action_segments.png'), bbox_inches='tight', pad_inches=0.1, dpi=300)
-     
-output_dir = 'output'
-os.makedirs(output_dir, exist_ok=True)
+        batch_results.append({"precision": precision, "recall": recall})
+    
+    return batch_results
 
-clip_model = BaseCLIPModel()
-clap_model = BaseCLAPModel()
-
-root_dir = 'data/thumos14'
-split = 'val'
-train_loader = get_thumos_dataloader(root_dir, split=split, batch_size=1)
-video_frames, audio_waveforms, (start, end, labels) = next(iter(train_loader))
-
-# Load class labels and create text prompts
 class_labels_file = os.path.join(root_dir, 'classes.txt')
-with open(class_labels_file, 'r') as f:
-    class_labels = [line.strip() for line in f.readlines()]
+class_file = prepare_labels(class_labels_file)
+prompts = list(class_file.values())
+classes = list(class_file.keys())
 
-class_label_dict = {int(label.split()[0]): f"a video of the action {split_camel_case(' '.join(label.split()[1:]))}" for label in class_labels}
+# Get text embeddings
+text_embeddings = clip_model.get_text_embedding(prompts)
 
-label = labels[-1].item()
-text_prompt = class_label_dict[label]
+class_results = defaultdict(list)
 
-text_embedding_clip = clip_model.get_text_embedding([text_prompt], use_tensor=True)[0]
-text_embedding_clap = clap_model.get_text_embedding([text_prompt, ""], use_tensor=True)[0]
-frame_features = clip_model.get_image_embedding(video_frames, use_tensor=True)
-# audio_features = clap_model.get_audio_embedding_from_data(audio_waveforms, use_tensor=True)
+for batch_idx, (video_frames, _, ground_truths) in enumerate(dataloader):
+    ground_truths = [gt.to(device) for gt in ground_truths]
+    
+    batch_video_features = extract_clip_features(video_frames, clip_model)  # Extract features for the whole batch
+    
+    # You might need to adjust the following part further based on how you want to handle the padded parts
+    batch_action_proposals = []
+    for i in range(batch_size):
+        vf = batch_video_features[i]
+        action_proposals = detect_temporal_actions(vf.unsqueeze(0), text_embeddings, window_size, stride, threshold)
+        batch_action_proposals.append(action_proposals)
+        
+    batch_evaluation_metrics = evaluate_temporal_actions(batch_action_proposals, ground_truths, iou_threshold, classes)
+    
+    for i in range(batch_size):
+        gt_class = ground_truths[i][2].squeeze(0)
+        class_results[gt_class].append((batch_evaluation_metrics[i]["precision"], batch_evaluation_metrics[i]["recall"]))
+    
+    print(f"Batch {batch_idx + 1}: {batch_evaluation_metrics}")
 
-frame_similarities = [cosine_similarity(text_embedding_clip, frame_feature) for frame_feature in frame_features]
+    del batch_video_features
+    del batch_action_proposals
+    torch.cuda.empty_cache()  # Release unused GPU memory
+class_aps = {}
 
-similarity_threshold = 0.33  # You can optimize this using a validation set
-min_duration = 2  # Minimum duration of an action segment in frames
-smoothing_window_size = 10  # Size of the smoothing window
+for cls, pr_values in class_results.items():
+    sorted_pr_values = sorted(pr_values, key=lambda x: x[1])  # Sort by recall
+    precisions = [pr[0] for pr in sorted_pr_values]
+    recalls = [pr[1] for pr in sorted_pr_values]
 
-# Find action segments
-action_segments = find_action_segments(frame_similarities, similarity_threshold, min_duration, smoothing_window_size)
+    # Compute the AP using the trapezoidal rule
+    ap = np.trapz(precisions, recalls)
+    class_aps[cls] = ap
 
-def convert_segments_to_time(action_segments, frame_rate):
-    time_based_segments = []
-    for start_frame, end_frame in action_segments:
-        start_time = start_frame / frame_rate
-        end_time = end_frame / frame_rate
-        time_based_segments.append((start_time, end_time))
-    return time_based_segments
-
-time_based_segments = convert_segments_to_time(action_segments, 30)
-
-
-# save_frame_action_segments_figure(video_frames, action_segments, label, output_dir)
-
-
-print("Action segments:", action_segments, start, end)
-
-
-# audio_similarities = [cosine_similarity(text_embedding_clap, audio_feature) for audio_feature in audio_features]
-
-# save_frame_similarities_figure(video_frames, frame_similarities, label, output_dir)
-
-
-
-
-# max_frame_similarity_idx = np.argmax(frame_similarities)
-# min_frame = np.argmin(frame_similarities)
-# # max_audio_similarity_idx = torch.argmax(audio_similarities)
-
-# most_similar_frame = video_frames[0][max_frame_similarity_idx].numpy().transpose(1,2,0)
-
-# least_similar_frame = video_frames[0][min_frame].numpy().transpose(1,2,0)
-# # most_similar_audio = audio_waveforms[max_audio_similarity_idx].numpy()
-
-
-# # Get the original class label (before processing)
-# original_class_label = class_label_dict[label]
-
-# frame_img = Image.fromarray((most_similar_frame).astype(np.uint8))
-# frame_img.save(os.path.join(output_dir, f'{original_class_label}_most_similar_frame.png'))
-
-# frame_img = Image.fromarray((least_similar_frame).astype(np.uint8))
-# frame_img.save(os.path.join(output_dir, f'{original_class_label}_least_similar_frame.png'))
-
-# audio_waveforms = audio_waveforms.squeeze(0).transpose(1, 0)
-
-# sf.write(os.path.join(output_dir, f'audio.wav'), audio_waveforms.numpy(), samplerate=16000)
+# Calculate mAP
+mAP = np.mean(list(class_aps.values()))
+print(f"mAP: {mAP}")
