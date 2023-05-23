@@ -12,7 +12,7 @@ import torch.nn as nn
 root_dir = 'data/thumos14'
 split = "val"  # 'train', 'val', or 'test'
 batch_size = 2
-num_workers = 20
+num_workers = 4
 iou_threshold = 0.3
 window_size = 16
 stride = 8
@@ -35,16 +35,6 @@ if torch.cuda.device_count() > 1:
     clip_model = clip_model.module
 
     
-
-
-def split_camel_case(s):
-    return re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', s)
-
-def prepare_labels(class_file):
-    with open(class_file, 'r') as f:
-        class_labels = [line.strip() for line in f.readlines()]
-
-    return {int(label.split()[0]): f"a video of {split_camel_case(' '.join(label.split()[1:]))}" for label in class_labels}
 
 def extract_clip_features(video_frames, clip_model):
     video_features = clip_model.get_image_embedding(video_frames)
@@ -77,48 +67,58 @@ def calculate_iou(a, b):
 
 def evaluate_temporal_actions(batch_action_proposals, batch_ground_truths, iou_threshold, classes):
     batch_results = []
-    
-    for action_proposals, ground_truths in zip(batch_action_proposals, batch_ground_truths):
-        true_positives, false_positives = 0, 0
-        gt_class = ground_truths[2].item()
-        found_true_positive = False
 
-        for proposal in action_proposals:
-            ps, pe, pc = proposal
-            pc = classes[pc]
-            is_true_positive = False
+    # Unpack the ground truth data
+    start_times, end_times, class_labels = batch_ground_truths
 
-            if pc == gt_class:  # Check if the predicted class matches the ground truth class
-                for gt in zip(ground_truths[0].squeeze(0), ground_truths[1].squeeze(0)):
-                    if calculate_iou((ps, pe), gt) > iou_threshold:
+    for action_proposals, starts, ends, class_labels in zip(batch_action_proposals, start_times, end_times, class_labels):
+        # Arrange action proposals in ascending order based on start times
+        proposals = sorted(action_proposals, key=lambda x: x[0])
+
+        for start, end in zip(starts, ends):
+            # Create ground truth list for each instance in the batch
+            true_positives, false_positives = 0, 0
+            gt_class = class_labels.item()  # get the ground truth class for this instance
+            found_true_positive = False
+
+            for proposal in proposals:
+                ps, pe, pc = proposal
+                pc = classes[pc]
+                is_true_positive = False
+                breakpoint()
+
+                if pc == gt_class:  # Check if the predicted class matches the ground truth class
+                    if calculate_iou((ps, pe), (start.item(), end.item())) > iou_threshold:  # compare with the ground truth start and end times
                         is_true_positive = True
                         break
 
-            if is_true_positive:
-                true_positives += 1
-                found_true_positive = True
-            else:
-                false_positives += 1
+                if is_true_positive:
+                    true_positives += 1
+                    found_true_positive = True
+                else:
+                    false_positives += 1
 
-        precision = true_positives / (true_positives + false_positives) if true_positives + false_positives > 0 else 0
-        recall = 1 if found_true_positive else 0
+            precision = true_positives / (true_positives + false_positives) if true_positives + false_positives > 0 else 0
+            recall = 1 if found_true_positive else 0
 
-        batch_results.append({"precision": precision, "recall": recall})
-    
+            batch_results.append({"precision": precision, "recall": recall})
+
     return batch_results
 
-class_labels_file = os.path.join(root_dir, 'classes.txt')
-class_file = prepare_labels(class_labels_file)
-prompts = list(class_file.values())
-classes = list(class_file.keys())
+# class_labels_file = os.path.join(root_dir, 'classes.txt')
+# class_file = prepare_labels(class_labels_file)
+# prompts = list(class_file.values())
+# classes = list(class_file.keys())
 
 # Get text embeddings
-text_embeddings = clip_model.get_text_embedding(prompts)
+# text_embeddings = clip_model.get_text_embedding(prompts)
 
 class_results = defaultdict(list)
 
-for batch_idx, (video_frames, _, ground_truths) in enumerate(dataloader):
+for batch_idx, (video_frames, _, prompts, ground_truths) in tqdm(enumerate(dataloader), total=len(dataloader), desc="Processing batches"):
     ground_truths = [gt.to(device) for gt in ground_truths]
+    video_frames = video_frames.to(device)
+    prompts = prompts.to(device)
     
     batch_video_features = extract_clip_features(video_frames, clip_model)  # Extract features for the whole batch
     
@@ -132,7 +132,7 @@ for batch_idx, (video_frames, _, ground_truths) in enumerate(dataloader):
     batch_evaluation_metrics = evaluate_temporal_actions(batch_action_proposals, ground_truths, iou_threshold, classes)
     
     for i in range(batch_size):
-        gt_class = ground_truths[i][2].squeeze(0)
+        gt_class = ground_truths[2][i].item()
         class_results[gt_class].append((batch_evaluation_metrics[i]["precision"], batch_evaluation_metrics[i]["recall"]))
     
     print(f"Batch {batch_idx + 1}: {batch_evaluation_metrics}")
