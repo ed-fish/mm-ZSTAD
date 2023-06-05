@@ -60,7 +60,7 @@ def string_to_list(s):
     return s
 
 # Read the CSV file
-data = pd.read_csv('val/thumos_val.csv')
+data = pd.read_csv('/home/ed/video/mm-ZSTAD/data/thumos14/train/thumos_train.csv')
 
 # Function to convert lists within strings to actual lists
 def string_to_list(s):
@@ -79,4 +79,4 @@ grouped_data['end_action'] = grouped_data['end_action'].apply(string_to_list)
 grouped_data['start_action'] = grouped_data['start_action'].apply(lambda x: f"[{' '.join(map(str, x))}]")
 grouped_data['end_action'] = grouped_data['end_action'].apply(lambda x: f"[{' '.join(map(str, x))}]")
 
-grouped_data.to_csv('grouped_data.csv', index=False)
+grouped_data.to_csv('thumos_train_list.csv', index=False)
